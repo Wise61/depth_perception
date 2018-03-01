@@ -1,6 +1,7 @@
 from PIL import Image, ImageOps
 import pylab
 import hashlib
+import progressbar
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
@@ -10,8 +11,10 @@ from random import randint
 from scipy import signal
 from scipy.interpolate import griddata
 from sklearn.decomposition import FastICA
-from sklearn.feature_extraction import image
+from sklearn.feature_extraction import image as skimage
 from ipywidgets import interact, interactive, fixed
+
+
 
 
 def generate_gabor(size, shift, sigma, rotation, phase_shift, frequency):
@@ -64,6 +67,9 @@ def linear_convolution(center, slide):
 
 def double_convolve(normal, shifted, image, pupillary_distance):
 
+    #CHECKOUT https://github.com/maweigert/gputools
+    #probably VERY advantageous to switch over to GPU for convolutions!
+
     normal_convolved = signal.convolve2d(image, normal, boundary='symm', mode='same')
     shifted_convolved = signal.convolve2d(image, shifted, boundary='symm', mode='same')
 
@@ -89,7 +95,7 @@ def double_convolve(normal, shifted, image, pupillary_distance):
     #low_values_flags = mul <= 0 #mul.max()*0.5  # Where values are low
     #mul[low_values_flags] = 0  # All low values set to 0
     realigned[0:,pupillary_distance:] = mul
-    return np.abs(realigned)
+    return np.abs(mul)
 
 def scale_disparity(activity_map, disparity_map):
     scaled_disparity = np.zeros([activity_map.shape[0],activity_map.shape[1],disparity_map.shape[0]])
@@ -99,6 +105,9 @@ def scale_disparity(activity_map, disparity_map):
             scaled_disparity[x,y] = activity_map[x,y] * scaled_disparity[x,y]
 
     return scaled_disparity
+
+
+
 
 
 
@@ -229,155 +238,131 @@ class LGN:
 
 
 
-def runEx(pShift=0.0, R=3, Trans = 0.1):
-
-    tarray = []
-    parray = []
-    carray = []
-    harray = []
-
-    patch_size = 8
-
-    for bigT in range(1,5):
-        bigP = bigT / (((np.pi * (3**2)/2))*1.1) + pShift
-        print("t: ", bigT)
-        print("p: ", bigP)
-
-        feg = []
-        seg = []
-
-        for gg in range(5):
-
-
-            patches_1 = []
-            patches_2 = []
-            for n in range(5):
-                seed = randint(1,100)
-                # Generate the spontaneous activity patterns
-                L = LGN(width = 64, p = bigP, r = R, t = bigT, trans = Trans, make_wave = True, num_layers=2, random_seed=seed)
-                # Save patterns as images
-                images = L.make_img_mat()
-
-                # Generate 16x16 image patches for both left and right eye using a sliding window
-                patches_1.append(image.extract_patches_2d(images[0], (patch_size, patch_size)))
-                patches_2.append(image.extract_patches_2d(images[1], (patch_size, patch_size)))
-
-            patches_1 = np.array(patches_1)
-            patches_2 = np.array(patches_2)
-
-            blacklist = []
-
-            for x in range(0,patches_1.shape[0]):
-                if patches_1[x].std() == 0.0:
-                    blacklist.append(x)
-                    continue
-                        #add to black list
-
-                if patches_2[x].std() == 0.0:
-                    blacklist.append(x)
-                    #add to black list
-
-            blacklist = np.array(blacklist)
-            if (blacklist.shape[0] != 0):
-                patches_1 = np.delete(patches_1, blacklist, axis=0)
-                patches_2 = np.delete(patches_2, blacklist, axis=0)
-                    #removes boring patches (the patches with no activity!)
-
-            patches_1 = patches_1.reshape((patches_1.shape[0]*patches_1.shape[1]),patch_size,patch_size)
-            patches_2 = patches_2.reshape((patches_2.shape[0]*patches_2.shape[1]),patch_size,patch_size)
-
-            # Reshape the array to the shape (patches, the size of the patches)
-            reshaped_patches_1 = patches_1.reshape(-1, patches_1.shape[1]*patches_1.shape[1])
-            reshaped_patches_2 = patches_2.reshape(-1, patches_2.shape[1]*patches_2.shape[1])
-            composite_patches = np.concatenate((reshaped_patches_1,reshaped_patches_2),axis=1)
-
-            # Number of components to create/use
-            n_ica_components = 20
-
-            # Run ICA on all the patches and return generated components
-            icatemp = FastICA(n_components=n_ica_components, random_state=1) # note, sensitive to n_components
-            icafit_1 = icatemp.fit(composite_patches)
-            ica_comp_1 = icafit_1.components_
-
-            # Get the components from both eye layers
-            first_eye = ica_comp_1[:, 0:patches_1.shape[1]**2]
-            second_eye = ica_comp_1[:, patches_1.shape[1]**2:]
-
-            # Reshape components (for easier plotting)
-            results_1 = first_eye.reshape(-1,patches_1.shape[1],patches_1.shape[1])
-            results_2 = second_eye.reshape(-1,patches_1.shape[1],patches_1.shape[1])
-            feg.append(results_1)
-            seg.append(results_2)
 
 
 
-        feg = np.array(feg)
-        seg = np.array(seg)
-        first_eye_gabors = np.array(feg).reshape((feg.shape[0] * feg.shape[1]),patch_size,patch_size)
-        second_eye_gabors = np.array(seg).reshape((seg.shape[0] * seg.shape[1]),patch_size,patch_size)
-        auto = open_norm("shift5_70patch.png",verbose=False)
+def generate_patches(num_patches, patch_size, lgn_width, lgn_p, lgn_r, lgn_t, lgn_a):
+    half_comp = patch_size**2
+    patch_count = 0
 
-        initi = True
+    while (patch_count < num_patches):
+        L = LGN(width = lgn_width, p = lgn_p, r = lgn_r, t = lgn_t, trans = lgn_a, make_wave = True, num_layers=2, random_seed=randint(1,100))
+        layer_activity = L.make_img_mat()
+        patches_1 = np.array(skimage.extract_patches_2d(layer_activity[0], (patch_size, patch_size)))
+        patches_2 = np.array(skimage.extract_patches_2d(layer_activity[1], (patch_size, patch_size)))
+        reshaped_patches_1 = patches_1.reshape(-1, patches_1.shape[1]*patches_1.shape[1])
+        reshaped_patches_2 = patches_2.reshape(-1, patches_2.shape[1]*patches_2.shape[1])
+        composite_patches = np.concatenate((reshaped_patches_1,reshaped_patches_2),axis=1)
+        blacklist = []
+        for x in range(composite_patches.shape[0]):
+            if composite_patches[x][:half_comp].std() == 0.0 or composite_patches[x][half_comp:].std() == 0.0:
+                blacklist.append(x)
+        composite_patches = np.delete(composite_patches, np.array(blacklist), axis=0)
+        if (patch_count == 0):
+            patch_base = composite_patches
+        else:
+            patch_base = np.append(patch_base, composite_patches, axis=0)
+        patch_count = patch_base.shape[0]
 
-        for x in range(0,first_eye_gabors.shape[0]):
-            am1 = double_convolve(first_eye_gabors[x], second_eye_gabors[x], auto,70)
-            dm1 = linear_convolution(first_eye_gabors[x], second_eye_gabors[x])
-            if ((np.argmax(np.abs(dm1))-patch_size) != 0):
-                sd1 = scale_disparity(am1,dm1)
-                if initi == True:
-                    ca = sd1
-                    initi = False
-                else:
-                    ca = ca + sd1
-
-
-
-        depth_estimate = np.zeros([ca.shape[0],ca.shape[1]])
-
-        for x in range(ca.shape[0]):
-            for y in range(ca.shape[1]):
-                peak = np.abs(np.argmax(np.abs(ca[x,y]))-patch_size)
-                depth_estimate[x,y] = peak
+    return patch_base[:num_patches]
 
 
 
 
-        dm = np.array(Image.open("dm.png").convert("L"))
-        corr = np.corrcoef(depth_estimate[0:600,70:670].flatten(),dm[0:600,70:670].flatten())[0,1]
-        print("corr: ", corr)
+def perform_ica(num_components, patches):
+    # Run ICA on all the patches and return generated components
+    ica_instance = FastICA(n_components=num_components, random_state=1,max_iter=1000) # note, sensitive to n_components
+    icafit = ica_instance.fit(patches)
+    ica_components = icafit.components_
+    return ica_components
+
+
+def generate_filters(num_filters, num_components, num_patches, patch_size, lgn_width, lgn_p, lgn_r, lgn_t, lgn_a):
+    print("GENERATING FILTERS")
+    bar = progressbar.ProgressBar(max_value=num_filters)
+    filter_count = 0
+    while (filter_count < num_filters):
+        patches = generate_patches(num_patches, patch_size, lgn_width, lgn_p, lgn_r, lgn_t, lgn_a)
+        filters = perform_ica(num_components, patches)
+        if (filter_count == 0):
+            filter_base = filters
+        else:
+            filter_base = np.append(filter_base, filters, axis=0)
+        filter_count = filter_base.shape[0]
+        if (filter_count < num_filters):
+            bar.update(filter_count)
+        else:
+            bar.update(num_filters)
+
+    return filter_base[:num_filters]
+
+def unpack_filters(filters):
+    half_filter = int(filters.shape[1]/2)
+    filter_dim = int(np.sqrt(filters.shape[1]/2))
+    first_eye = filters[:, 0:half_filter].reshape(-1,filter_dim,filter_dim)
+    second_eye = filters[:, half_filter:].reshape(-1,filter_dim,filter_dim)
+    return (first_eye, second_eye)
+
+def linear_disparity(first_eye, second_eye):
+    disparity_map = np.empty([first_eye.shape[0],first_eye.shape[1]*2])
+    for index in range(first_eye.shape[0]):
+        disparity = linear_convolution(first_eye[index], second_eye[index])
+        disparity_map[index] = disparity
+    return disparity_map
+
+
+def normalize_disparity(disparity_map):
+    sum_disparity = np.sum(disparity_map, axis=0)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        normalized_disparity = disparity_map / sum_disparity
+    return normalized_disparity
+
+
+def generate_activity(autostereogram, asg_patch_size, first_eye, second_eye, disparity_map):
+    print("CALCULATING ACTIVITY")
+    bar = progressbar.ProgressBar(max_value=first_eye.shape[0])
+    for index in range(first_eye.shape[0]):
+        #make this more elegant
+        convolution = double_convolve(first_eye[index], second_eye[index], autostereogram, asg_patch_size)
+        scaled_activity = scale_disparity(convolution,disparity_map[index])
+        if index == 0:
+            summed_activity = scaled_activity
+        else:
+            summed_activity = summed_activity + scaled_activity
+        bar.update(index)
+    bar.update(first_eye.shape[0])
+    return summed_activity
 
 
 
-        hasher = "%f%f%f" % (bigT, bigP, corr)
-        hasher = hashlib.sha256(hasher.encode('utf-8')).hexdigest()
-        hasher = hasher[:20]
-        print("hash: ", hasher)
-        namer = "lgn_corr_data/%s.png" % (hasher)
-
-        plt.imshow(depth_estimate[0:600,70:670], cmap="binary")
-        plt.show()
-
-
-        saver = depth_estimate[0:600,70:670]
-
-        act = (255.0 / saver.max() * (saver - saver.min())).astype(np.uint8)
-        sv = Image.fromarray(act)
-        sv = ImageOps.colorize(sv, (0,0,0), (0,255,0))
-        sv.save(namer)
-
-        tarray.append(bigT)
-        parray.append(bigP)
-        carray.append(corr)
-        harray.append(hasher)
+def estimate_depth(activity):
+    print("ESTIMATING DEPTH")
+    depth_estimate = np.zeros([activity.shape[0],activity.shape[1]])
+    bar = progressbar.ProgressBar(max_value=activity.shape[0])
+    for x in range(activity.shape[0]):
+        for y in range(activity.shape[1]):
+            peak = np.abs(np.nanargmax(activity[x,y])-int(activity.shape[2]/2))
+            peak = np.nanargmax(activity[x,y])
+            depth_estimate[x,y] = peak
+        bar.update(x)
+    return depth_estimate
 
 
-    return {"t": tarray, "p": parray, "c": carray, "h": harray}
+test = generate_filters(1000, 5, 5000, 8, 128, 0.128, 3, 2, 0.2)
+t = unpack_filters(test)
+dm = linear_disparity(t[0],t[1])
+nd = normalize_disparity(dm)
 
 
-zero = runEx(0.0)
+auto = open_norm("shift5_70patch.png",verbose=False)
+asg_patch_sz = 70
+act = generate_activity(auto, asg_patch_sz, t[0], t[1], nd)
+de = estimate_depth(act)
+plt.imshow(de)
+plt.show()
 
-plusp1 = runEx(0.01)
-plusp2 = runEx(0.02)
-
-minusp1 = runEx(-0.01)
-minusp2 = runEx(-0.02)
+dm = np.array(Image.open("dm.png").convert("L"))
+dm = dm[0:600,70:670]
+de = de[0:600,:]
+corr = np.corrcoef(de.flatten(),dm.flatten())[0,1]
+print("corr: ", corr)
