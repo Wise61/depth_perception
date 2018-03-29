@@ -1,0 +1,1 @@
+{"num_filters": 2000, "num_components": 20, "num_patches": 100000, "patch_size": 8, "lgn_width": 64, "lgn_p": 0.1121015150373274, "lgn_r": 3, "lgn_t": 3, "lgn_a": 0.05, "corr": 0.31701710373344527, "time": "Fri, 02 Mar 2018 02:36:11 GMT", "id": "bfde5348bbd14607916c"}
